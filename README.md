@@ -125,17 +125,30 @@ credentials from `.env`).
 
 ## Hosting
 
-Not yet decided for this repo — pick one (see the original plan discussion
-for the tradeoffs considered):
+**Render free tier**, using the included `render.yaml` Blueprint:
 
-- **Render/Fly/Railway, single service** (recommended starting point):
-  connect this repo, root directory `.`, start command
-  `uvicorn app:app --host 0.0.0.0 --port $PORT`. Set `DASHBOARD_USERNAME`,
-  `DASHBOARD_PASSWORD`, and optionally `REFRESH_INTERVAL_MIN`/
-  `REFRESH_COOLDOWN_SEC` in the host's environment-variables UI.
-- Separate cron job + backend, self-hosted VM, or a serverless
-  scheduled-function split are all still on the table if the single-service
-  option turns out to have issues in practice (e.g. free-tier cold starts).
+1. [dashboard.render.com](https://dashboard.render.com) → sign in with GitHub
+   (first time only: authorize the Render GitHub App for this repo, or all
+   repos).
+2. **New +** → **Blueprint** → pick `jeeeepp/dashboard-web` → Render reads
+   `render.yaml` and pre-fills the service (name, build/start command, free
+   plan).
+3. It'll prompt for `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` (left blank
+   in `render.yaml` on purpose — this is a public repo, real credentials
+   never belong in it). Fill in real values, not the `testuser`/`testpass123`
+   used for local testing.
+4. Deploy. First boot has no `cache.json` yet, so the dashboard loads
+   immediately but shows 0 rows for the first ~2 minutes while the initial
+   scan runs in the background (poll `/api/status` / watch the "scanning..."
+   state in the UI — this is expected, not a bug).
 
-This repo is deploy-ready for the first option as-is; nothing else needs to
-change to try it.
+**Known free-tier limitation**: Render's free web services don't include a
+persistent disk, so `cache.json` is not guaranteed to survive a redeploy or
+a cold restart after ~15min idle — expect an empty-then-populating dashboard
+again after either. If that's annoying in practice, either upgrade to a paid
+Render disk, or move to Fly.io (small always-on VM, same app code) — worth
+revisiting after trying the free tier first.
+
+Separate cron job + backend, self-hosted VM, or a serverless
+scheduled-function split are all still on the table if Render doesn't work
+out in practice.

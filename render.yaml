@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: dashboard-web
+    runtime: python
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      # sync: false -- Render prompts for these in the UI at deploy time
+      # rather than storing them in this repo (this is a public repo).
+      - key: DASHBOARD_USERNAME
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: REFRESH_INTERVAL_MIN
+        value: "45"
+      - key: REFRESH_COOLDOWN_SEC
+        value: "120"
