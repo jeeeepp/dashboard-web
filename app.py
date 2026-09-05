@@ -39,6 +39,14 @@ STATIC_DIR = BASE_DIR / "static"
 
 REFRESH_INTERVAL_SEC = int(os.environ.get("REFRESH_INTERVAL_MIN", "45")) * 60
 REFRESH_COOLDOWN_SEC = int(os.environ.get("REFRESH_COOLDOWN_SEC", "120"))
+# Safety net -- run_full_scan() has no internal timeout of its own (neither
+# does the vendored yfinance-calling code it wraps), so a stalled network
+# call could otherwise leave `scanning` stuck true FOREVER with no way for
+# the UI/user to recover except restarting the whole process. 10 minutes is
+# generous vs. the ~2min measured on a normal dev machine (see README.md),
+# to allow for slower free-tier CPU/network without firing on a merely-slow
+# (not actually hung) run.
+SCAN_TIMEOUT_SEC = int(os.environ.get("SCAN_TIMEOUT_SEC", "600"))
 
 log = logging.getLogger("dashboard.app")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
@@ -59,6 +67,7 @@ class ScanState:
         self.stats: dict = {}
         self.lock = asyncio.Lock()
         self.last_refresh_finished = 0.0
+        self.current_scan_started: Optional[float] = None  # monotonic; None when idle
         self.scheduler_task: Optional[asyncio.Task] = None
 
     def load_from_disk(self) -> bool:
@@ -99,17 +108,41 @@ class ScanState:
 
     async def _do_scan(self) -> None:
         async with self.lock:
+            self.current_scan_started = time.monotonic()
             try:
                 loop = asyncio.get_running_loop()
                 # run_full_scan() is synchronous/blocking (yfinance calls) --
                 # run it in a thread so it never blocks the event loop (and
                 # therefore never blocks /api/scan reads from the cache
                 # while a scan is in flight).
-                rows, stats = await loop.run_in_executor(None, run_full_scan)
+                rows, stats = await asyncio.wait_for(
+                    loop.run_in_executor(None, run_full_scan), timeout=SCAN_TIMEOUT_SEC
+                )
                 self.rows = rows_to_dicts(rows)
                 self.stats = stats
                 self.save_to_disk()
                 log.info("Scan complete: %s", stats)
+            except asyncio.TimeoutError:
+                # SAFETY NET, not a full fix: this frees the lock so the UI
+                # can retry, but the underlying thread pool worker cannot
+                # actually be killed (Python threads aren't cancellable) --
+                # if the network call is truly hung (not just slow), that
+                # worker stays stuck consuming one thread-pool slot forever.
+                # Repeated timeouts (e.g. every scheduled interval) could
+                # eventually exhaust the pool and block ALL future scans too.
+                # This buys recovery from an occasional stall; it does not
+                # fix a persistently-hanging fetch -- if timeouts recur, the
+                # real fix is finding + bounding whichever vendored network
+                # call is hanging (see vendor/README.md: vendor files are
+                # read-only, so that'd mean adding an outer guard here, not
+                # editing them).
+                log.error(
+                    "Scan timed out after %ds -- releasing lock so a retry "
+                    "can start. (The stalled fetch may still be running in "
+                    "the background; its result, if any, will be discarded.)",
+                    SCAN_TIMEOUT_SEC,
+                )
+                self.stats = {**self.stats, "last_error": f"scan timed out after {SCAN_TIMEOUT_SEC}s"}
             except Exception as exc:  # noqa: BLE001
                 log.error("Scan failed: %s", exc)
                 self.stats = {**self.stats, "last_error": str(exc)}
@@ -121,6 +154,7 @@ class ScanState:
                 # a scan completes, defeating the "block rapid back-to-back
                 # clicks" purpose the cooldown exists for.
                 self.last_refresh_finished = time.monotonic()
+                self.current_scan_started = None
 
     def start_refresh_if_allowed(self, *, bypass_cooldown: bool = False) -> dict:
         """Non-blocking: kicks off a background scan task if allowed and
@@ -234,8 +268,15 @@ async def api_status(_: None = Depends(check_auth)):
     cooldown_remaining = None
     if elapsed is not None and elapsed < REFRESH_COOLDOWN_SEC:
         cooldown_remaining = round(REFRESH_COOLDOWN_SEC - elapsed, 1)
+    scanning_elapsed = (
+        round(time.monotonic() - state.current_scan_started, 1)
+        if state.current_scan_started is not None
+        else None
+    )
     return {
         "scanning": state.lock.locked(),
+        "scanning_elapsed_sec": scanning_elapsed,
+        "scan_timeout_sec": SCAN_TIMEOUT_SEC,
         "stats": state.stats,
         "cooldown_remaining_sec": cooldown_remaining,
         "row_count": len(state.rows),

@@ -130,6 +130,12 @@
     align-items: center;
     gap: 6px;
   }
+  .hint {
+    display: inline-block;
+    cursor: help;
+    color: var(--muted);
+    border-bottom: 1px dotted var(--muted);
+  }
   main { padding: 0 20px 40px; }
   .table-wrap {
     overflow-x: auto;
@@ -186,7 +192,7 @@
 
 <div class="conditions">
   <div class="cond-group">
-    <div class="group-title"><input id="rsi-enabled" type="checkbox"> RSI</div>
+    <div class="group-title"><input id="rsi-enabled" type="checkbox"> <span class="hint" title="เปิดใช้เงื่อนไข RSI: คำนวณ RSI จาก close price ตาม period ที่ตั้ง แล้วเทียบกับค่า Value ด้วย operator ที่เลือก (เช่น RSI(50) > 60) ต้องผ่านเงื่อนไขนี้ด้วยถ้าเปิดใช้ (AND กับ SMA/EMA)">RSI ⓘ</span></div>
     <label>Period
       <input id="rsi-period" type="number" min="2" max="200" value="50">
     </label>
@@ -203,7 +209,7 @@
   </div>
 
   <div class="cond-group">
-    <div class="group-title"><input id="sma-enabled" type="checkbox"> SMA (price vs. every period below)</div>
+    <div class="group-title"><input id="sma-enabled" type="checkbox"> <span class="hint" title="เปิดใช้เงื่อนไข SMA: เทียบราคาปิดล่าสุดกับ SMA ของทุก period ที่ใส่ไว้ (คั่นด้วยจุลภาค) ด้วย operator เดียวกันทั้งหมด — ต้องผ่านทุก period (AND) เช่น price > SMA(5) และ price > SMA(20) และ ... แก้ตัวเลข period ได้เอง">SMA (price vs. every period below) ⓘ</span></div>
     <label>Operator
       <select id="sma-operator">
         <option value=">">price &gt; SMA</option>
@@ -239,8 +245,8 @@
       <option value="US">US</option>
     </select>
   </label>
-  <label class="checkbox-field"><input id="f-squeeze" type="checkbox"> Squeeze only</label>
-  <label class="checkbox-field"><input id="f-owned" type="checkbox"> Owned only</label>
+  <label class="checkbox-field"><input id="f-squeeze" type="checkbox"> <span class="hint" title="กรองเฉพาะหุ้นที่ราคากำลัง &quot;บีบตัว&quot; (Bollinger Band bandwidth แคบสุดในรอบ ~10% ล่างของ 125 วันทำการที่ผ่านมา) — เป็นสัญญาณเรื่อง &quot;เวลา&quot; ว่าน่าจะมีการเคลื่อนไหวแรงเร็วๆ นี้ ไม่ได้บอกทิศทางว่าจะขึ้นหรือลง">Squeeze only ⓘ</span></label>
+  <label class="checkbox-field"><input id="f-owned" type="checkbox"> <span class="hint" title="กรองเฉพาะหุ้นที่อยู่ใน watchlist.txt ของคุณเอง (หุ้นที่ถืออยู่/ติดตามอยู่จริง) — ไม่เกี่ยวกับผลสแกน แค่ติด tag ว่าตัวไหนเป็นของคุณ">Owned only ⓘ</span></label>
   <label>ค้นหา ticker
     <input id="f-q" type="text" placeholder="เช่น PTT">
   </label>
@@ -374,29 +380,33 @@ function relativeTime(iso) {
 }
 
 async function loadScan() {
+  // Returns a plain result object instead of touching statusLine directly --
+  // tick() below is the single place that decides the final status message,
+  // combining this with pollStatus()'s result. Two functions independently
+  // writing statusLine caused one to silently clobber the other's message
+  // every 5s poll.
   const resp = await fetch('/api/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(buildRequestBody()),
   });
   if (!resp.ok) {
-    statusLine.textContent = `โหลดข้อมูลไม่สำเร็จ (HTTP ${resp.status})`;
-    return;
+    return { ok: false, httpStatus: resp.status };
   }
   const data = await resp.json();
   renderRows(data.rows);
-  const stats = data.stats || {};
-  const asOf = stats.generated_utc ? relativeTime(stats.generated_utc) : 'ไม่มีข้อมูล';
-  statusLine.textContent = `${data.count}/${data.total} ตัว • อัปเดตล่าสุด ${asOf}`;
+  return { ok: true, count: data.count, total: data.total, stats: data.stats || {} };
 }
 
 async function pollStatus() {
   const resp = await fetch('/api/status');
-  if (!resp.ok) return;
+  if (!resp.ok) return null;
   const data = await resp.json();
   if (data.scanning) {
     refreshBtn.disabled = true;
-    refreshBtn.textContent = 'กำลังสแกน...';
+    const mins = Math.floor((data.scanning_elapsed_sec || 0) / 60);
+    const secs = Math.floor((data.scanning_elapsed_sec || 0) % 60);
+    refreshBtn.textContent = `กำลังสแกน... (${mins}:${String(secs).padStart(2, '0')})`;
   } else if (data.cooldown_remaining_sec) {
     refreshBtn.disabled = true;
     refreshBtn.textContent = `รออีก ${Math.ceil(data.cooldown_remaining_sec)}s`;
@@ -404,11 +414,33 @@ async function pollStatus() {
     refreshBtn.disabled = false;
     refreshBtn.textContent = 'Refresh now';
   }
+  return data;
 }
 
 async function tick() {
-  await pollStatus();
-  await loadScan();
+  const statusData = await pollStatus();
+  const scanData = await loadScan();
+
+  if (!scanData.ok) {
+    statusLine.textContent = `โหลดข้อมูลไม่สำเร็จ (HTTP ${scanData.httpStatus})`;
+    return;
+  }
+
+  const asOf = scanData.stats.generated_utc ? relativeTime(scanData.stats.generated_utc) : 'ไม่มีข้อมูล';
+  let line = `${scanData.count}/${scanData.total} ตัว • อัปเดตล่าสุด ${asOf}`;
+
+  if (statusData && statusData.scanning && statusData.scan_timeout_sec
+      && statusData.scanning_elapsed_sec > statusData.scan_timeout_sec * 0.7) {
+    // Getting close to the server's own timeout -- reassure the user this
+    // isn't stuck forever, a timeout will free it up automatically.
+    const mins = Math.floor(statusData.scanning_elapsed_sec / 60);
+    const timeoutMins = Math.round(statusData.scan_timeout_sec / 60);
+    line = `กำลังสแกนนานผิดปกติ (${mins} นาที) — ถ้าเกิน ${timeoutMins} นาทีระบบจะปล่อยให้ลองใหม่อัตโนมัติ • ${line}`;
+  } else if (statusData && !statusData.scanning && statusData.stats && statusData.stats.last_error) {
+    line = `⚠️ ครั้งล่าสุด error: ${statusData.stats.last_error} • ${line}`;
+  }
+
+  statusLine.textContent = line;
 }
 
 refreshBtn.addEventListener('click', async () => {

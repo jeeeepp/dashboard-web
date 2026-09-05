@@ -17,3 +17,5 @@ services:
         value: "45"
       - key: REFRESH_COOLDOWN_SEC
         value: "120"
+      - key: SCAN_TIMEOUT_SEC
+        value: "600"
