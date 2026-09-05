@@ -1,0 +1,11 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+python-dotenv>=1.0
+
+# Pulled in for scan_engine.py's use of the vendored scanner code
+# (vendor/scanner_core.py, vendor/market_screener.py) -- same pins as
+# agent-notification's own requirements.txt.
+yfinance>=0.2.40
+pandas>=2.0
+numpy>=1.24
+requests>=2.31

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+cache.json
+cache.json.tmp
+venv/
+.venv/
+
+# Real personal watchlist -- this repo is public and is a market-wide
+# scanner, not a watchlist viewer, so personal holdings don't belong in git
+# history. Copy watchlist.example.txt to watchlist.txt locally.
+watchlist.txt

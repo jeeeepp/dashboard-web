@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scan Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2f3a;
+    --text: #e6e8eb;
+    --muted: #8a90a0;
+    --accent: #4f8cff;
+    --good: #34c77b;
+    --bad: #ef5b5b;
+    --warn: #e8b339;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 5;
+  }
+  header h1 {
+    font-size: 18px;
+    margin: 0;
+    margin-right: auto;
+  }
+  #status-line {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:disabled {
+    background: var(--border);
+    color: var(--muted);
+    cursor: not-allowed;
+  }
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .filters label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .filters input, .filters select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+  .filters .checkbox-field {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+  }
+  main { padding: 0 20px 40px; }
+  .table-wrap {
+    overflow-x: auto;
+    margin-top: 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13px;
+    min-width: 900px;
+  }
+  th, td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  th {
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+    cursor: pointer;
+    user-select: none;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  th.sorted { color: var(--text); }
+  tbody tr:hover { background: rgba(255,255,255,0.03); }
+  .tag {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .tag-good { background: rgba(52,199,123,0.15); color: var(--good); }
+  .tag-bad { background: rgba(239,91,91,0.15); color: var(--bad); }
+  .tag-warn { background: rgba(232,179,57,0.15); color: var(--warn); }
+  .tag-muted { background: rgba(138,144,160,0.15); color: var(--muted); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  #empty-state { padding: 40px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 Scan Dashboard</h1>
+  <span id="status-line">กำลังโหลด...</span>
+  <button id="refresh-btn">Refresh now</button>
+</header>
+
+<div class="filters">
+  <label>Min shape
+    <select id="f-min-shape">
+      <option value="0">ทั้งหมด</option>
+      <option value="0.5">≥ 0.5</option>
+      <option value="1">= 1.0</option>
+    </select>
+  </label>
+  <label>Min RSI
+    <input id="f-min-rsi" type="number" step="1" placeholder="ไม่จำกัด">
+  </label>
+  <label>Max RSI
+    <input id="f-max-rsi" type="number" step="1" placeholder="ไม่จำกัด">
+  </label>
+  <label>Min total score
+    <input id="f-min-total" type="number" step="0.5" placeholder="ไม่จำกัด">
+  </label>
+  <label>Market
+    <select id="f-market">
+      <option value="all">ทั้งหมด</option>
+      <option value="SET">SET</option>
+      <option value="US">US</option>
+    </select>
+  </label>
+  <label class="checkbox-field"><input id="f-squeeze" type="checkbox"> Squeeze only</label>
+  <label class="checkbox-field"><input id="f-owned" type="checkbox"> Owned only</label>
+  <label>ค้นหา ticker
+    <input id="f-q" type="text" placeholder="เช่น PTT">
+  </label>
+</div>
+
+<main>
+  <div class="table-wrap">
+    <table id="table">
+      <thead>
+        <tr>
+          <th data-key="ticker">Ticker</th>
+          <th data-key="market">Market</th>
+          <th data-key="price">Price</th>
+          <th data-key="shape_score">Shape</th>
+          <th data-key="rsi">RSI</th>
+          <th data-key="power_score">Power</th>
+          <th data-key="total_score">Total</th>
+          <th data-key="full_signal">Signal</th>
+          <th data-key="squeeze">Squeeze</th>
+          <th data-key="owned">Owned</th>
+          <th data-key="as_of_date">As of</th>
+          <th>Chart</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+  <div id="empty-state" style="display:none;">ไม่มีข้อมูลตรงกับ filter นี้</div>
+</main>
+
+<script>
+const statusLine = document.getElementById('status-line');
+const refreshBtn = document.getElementById('refresh-btn');
+const tbody = document.getElementById('tbody');
+const emptyState = document.getElementById('empty-state');
+
+const filterIds = ['f-min-shape', 'f-min-rsi', 'f-max-rsi', 'f-min-total', 'f-market', 'f-squeeze', 'f-owned', 'f-q'];
+let sortKey = 'total_score';
+let sortDir = -1; // desc
+let lastRows = [];
+let debounceTimer = null;
+let pollTimer = null;
+
+function buildQuery() {
+  const params = new URLSearchParams();
+  const minShape = document.getElementById('f-min-shape').value;
+  if (minShape) params.set('min_shape', minShape);
+  const minRsi = document.getElementById('f-min-rsi').value;
+  if (minRsi !== '') params.set('min_rsi', minRsi);
+  const maxRsi = document.getElementById('f-max-rsi').value;
+  if (maxRsi !== '') params.set('max_rsi', maxRsi);
+  const minTotal = document.getElementById('f-min-total').value;
+  if (minTotal !== '') params.set('min_total_score', minTotal);
+  const market = document.getElementById('f-market').value;
+  if (market !== 'all') params.set('market', market);
+  if (document.getElementById('f-squeeze').checked) params.set('squeeze_only', 'true');
+  if (document.getElementById('f-owned').checked) params.set('owned_only', 'true');
+  const q = document.getElementById('f-q').value.trim();
+  if (q) params.set('q', q);
+  return params.toString();
+}
+
+function fmt(v, digits) {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'number') return v.toFixed(digits ?? 2);
+  return v;
+}
+
+function tag(text, cls) {
+  return `<span class="tag ${cls}">${text}</span>`;
+}
+
+function renderRows(rows) {
+  lastRows = rows;
+  const sorted = [...rows].sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (av === null || av === undefined) return 1;
+    if (bv === null || bv === undefined) return -1;
+    if (av < bv) return -1 * sortDir;
+    if (av > bv) return 1 * sortDir;
+    return 0;
+  });
+
+  if (sorted.length === 0) {
+    tbody.innerHTML = '';
+    emptyState.style.display = 'block';
+    return;
+  }
+  emptyState.style.display = 'none';
+
+  tbody.innerHTML = sorted.map(r => {
+    const signalTag = r.full_signal ? tag('ทรงดีมีพลัง', 'tag-good') : tag('—', 'tag-muted');
+    const squeezeTag = r.squeeze ? tag('บีบตัว', 'tag-warn') : '';
+    const ownedTag = r.owned ? tag('Owned', 'tag-good') : '';
+    const powerLabel = r.power_score === 1 ? '+1' : (r.power_score === -1 ? '-1' : '0');
+    const powerCls = r.power_score === 1 ? 'tag-good' : (r.power_score === -1 ? 'tag-bad' : 'tag-muted');
+    return `<tr>
+      <td><strong>${r.ticker}</strong></td>
+      <td>${r.market}</td>
+      <td>${fmt(r.price, 2)}</td>
+      <td>${fmt(r.shape_score, 1)}</td>
+      <td>${fmt(r.rsi, 1)}</td>
+      <td>${tag(powerLabel, powerCls)}</td>
+      <td>${fmt(r.total_score, 1)}</td>
+      <td>${signalTag}</td>
+      <td>${squeezeTag}</td>
+      <td>${ownedTag}</td>
+      <td>${r.as_of_date ?? '—'}</td>
+      <td><a href="https://finance.yahoo.com/chart/${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener">chart</a></td>
+    </tr>`;
+  }).join('');
+}
+
+function relativeTime(iso) {
+  if (!iso) return 'ไม่มีข้อมูล';
+  const diffSec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diffSec < 60) return `${diffSec} วินาทีที่แล้ว`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} นาทีที่แล้ว`;
+  return `${Math.floor(diffSec / 3600)} ชั่วโมงที่แล้ว`;
+}
+
+async function loadScan() {
+  const qs = buildQuery();
+  const resp = await fetch(`/api/scan?${qs}`);
+  if (!resp.ok) {
+    statusLine.textContent = `โหลดข้อมูลไม่สำเร็จ (HTTP ${resp.status})`;
+    return;
+  }
+  const data = await resp.json();
+  renderRows(data.rows);
+  const stats = data.stats || {};
+  const asOf = stats.generated_utc ? relativeTime(stats.generated_utc) : 'ไม่มีข้อมูล';
+  statusLine.textContent = `${data.count}/${data.total} ตัว • อัปเดตล่าสุด ${asOf}`;
+}
+
+async function pollStatus() {
+  const resp = await fetch('/api/status');
+  if (!resp.ok) return;
+  const data = await resp.json();
+  if (data.scanning) {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = 'กำลังสแกน...';
+  } else if (data.cooldown_remaining_sec) {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = `รออีก ${Math.ceil(data.cooldown_remaining_sec)}s`;
+  } else {
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = 'Refresh now';
+  }
+  if (!data.scanning && pollTimer) {
+    // scan just finished (or was already idle) -- refresh the table once
+    // more so results reflect the latest cache without waiting on the
+    // regular poll interval.
+  }
+}
+
+async function tick() {
+  await pollStatus();
+  await loadScan();
+}
+
+refreshBtn.addEventListener('click', async () => {
+  const resp = await fetch('/api/refresh', { method: 'POST' });
+  const data = await resp.json();
+  if (data.status === 'started') {
+    statusLine.textContent = 'กำลังสแกนใหม่...';
+  } else if (data.status === 'already_running') {
+    statusLine.textContent = 'มีการสแกนอยู่แล้ว กำลังรอผล...';
+  } else if (data.status === 'cooldown') {
+    statusLine.textContent = `กรุณารออีก ${Math.ceil(data.retry_after_sec)} วินาที`;
+  }
+  await pollStatus();
+});
+
+filterIds.forEach(id => {
+  const el = document.getElementById(id);
+  const evt = (el.type === 'checkbox' || el.tagName === 'SELECT') ? 'change' : 'input';
+  el.addEventListener(evt, () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(loadScan, 200);
+  });
+});
+
+document.querySelectorAll('th[data-key]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    if (sortKey === key) {
+      sortDir *= -1;
+    } else {
+      sortKey = key;
+      sortDir = -1;
+    }
+    document.querySelectorAll('th').forEach(h => h.classList.remove('sorted'));
+    th.classList.add('sorted');
+    renderRows(lastRows);
+  });
+});
+
+tick();
+pollTimer = setInterval(tick, 5000);
+</script>
+</body>
+</html>

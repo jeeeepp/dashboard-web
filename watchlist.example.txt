@@ -1,0 +1,18 @@
+# Personal watchlist template — copy to watchlist.txt and fill in your own
+# tickers. watchlist.txt is gitignored (not committed) since this dashboard
+# is primarily a market-wide SCANNER (SET + US universe), not a watchlist
+# viewer -- the "Owned" column is a nice-to-have on top of that, not the
+# point of the tool, so there's no reason for your personal holdings to be
+# public.
+#
+#   cp watchlist.example.txt watchlist.txt
+#
+# One ticker per line. Lines starting with # are ignored. Blank lines are
+# ignored too. Format:
+#   Thai SET stocks : append .BK   e.g. PTT.BK, ADVANC.BK, KBANK.BK
+#   US stocks       : plain symbol e.g. AAPL, MSFT, NVDA
+#   Crypto pairs    : SYMBOL-USD   e.g. BTC-USD, ETH-USD
+#
+# Example (delete these, they're not real holdings):
+# AAPL
+# PTT.BK
