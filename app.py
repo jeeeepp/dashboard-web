@@ -27,7 +27,6 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.staticfiles import StaticFiles
 
 from scan_engine import run_full_scan, rows_to_dicts
 
@@ -267,7 +266,10 @@ async def api_refresh(_: None = Depends(check_auth)):
 
 @app.get("/", dependencies=[Depends(check_auth)])
 async def index():
+    # Deliberately NOT an app.mount("/static", StaticFiles(...)) -- a
+    # StaticFiles mount is a separate ASGI sub-app that does not go through
+    # this route's `dependencies=[Depends(check_auth)]`, so it would serve
+    # index.html completely unauthenticated (confirmed on a live deploy).
+    # index.html is self-contained (inline CSS/JS, no /static/* references),
+    # so serving it only via this single auth-gated route is sufficient.
     return FileResponse(STATIC_DIR / "index.html")
-
-
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
