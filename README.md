@@ -1,11 +1,18 @@
 # Scan Dashboard
 
-Live web dashboard for the KMK scanner's "ทรงดีมีพลัง" screen: a filterable,
-sortable table of every ticker in the SET (Thai) + S&P 500 (US) universe that
-matches your chosen conditions, with near-real-time price data pulled from
+Live web dashboard: a filterable, sortable table of every ticker in the SET
+(Thai) + S&P 500 (US) universe that matches **your own RSI/SMA/EMA
+conditions** — periods, operator (`>`/`<`/`=`), and threshold are all
+editable in the UI, not fixed — with near-real-time price data pulled from
 yfinance. Primarily a market-wide **scanner/screener**, not a watchlist
 viewer — the optional "Owned" column (see Local setup) is a small extra on
 top, not the point of the tool.
+
+This project's screen deliberately does **not** reuse
+`agent-notification`'s fixed "ทรงดีมีพลัง" rule (hard-coded SMA
+5/20/150/200 + RSI(50) thresholds) — it replaces it with a fully
+user-configurable one (see `conditions.py`). Close price only, everywhere,
+by design — no open/high/low is ever used.
 
 This is a **standalone project**, separate from the `jeeeepp/agent-notification`
 repo (the Discord scanner bot). It does not touch that repo's code or
@@ -29,35 +36,68 @@ Earlier designs considered here (and rejected, in order):
 
 What's left, and what this repo implements: an **always-on FastAPI backend**
 that fetches the whole universe on an internal schedule (not per page-view,
-not per filter change), caches the scored result in memory + on disk, and
-serves every dashboard request (including filter changes) from that cache.
-Nobody's filter tweak ever triggers a new yfinance call.
+not per filter change), caches each ticker's trailing close prices in memory
++ on disk, and serves every dashboard request (including changing RSI/SMA/EMA
+conditions) from that cache. Nobody's filter tweak ever triggers a new
+yfinance call — SMA/EMA/RSI for whatever period/operator/threshold you pick
+are computed on the spot from the cached prices.
 
 ## Layout
 
 - **`vendor/scanner_core.py`, `vendor/market_screener.py`** — read-only
   copies from `agent-notification`. Never edit these; see `vendor/README.md`
-  for the re-sync process if the upstream trading rule ever changes.
+  for the re-sync process if the upstream code ever changes. This project
+  only reuses their universe-building/fetch machinery (`load_universe`,
+  `fetch_price_history_bulk`, `is_squeezing`) plus two indicator primitives
+  (`compute_sma`, `compute_rsi_wilder`) — **not** their fixed shape/power
+  scoring rule, which this project replaces (see `conditions.py`).
 - **`scan_engine.py`** — the only file that calls into yfinance-backed code.
   `run_full_scan()` builds the universe (watchlist ∪ SET ∪ US), bulk-fetches
   price history (reusing `market_screener.fetch_price_history_bulk`'s
-  existing batching/retry/backoff — nothing reinvented), and scores each
-  ticker (`scanner_core.score_ticker` for shape/RSI/power/total,
-  `market_screener.is_squeezing` for the Bollinger squeeze flag).
+  existing batching/retry/backoff — nothing reinvented), flags the
+  Bollinger squeeze (`market_screener.is_squeezing`), and keeps each
+  ticker's trailing close prices (`ScanRow.closes`, last
+  `MAX_STORED_CLOSES=450` trading days) for `conditions.py` to compute
+  indicators from later, at any period.
+- **`conditions.py`** — the user-configurable RSI/SMA/EMA screen. Pydantic
+  request models (`RsiCondition`, `MaGroupCondition`, `ScanFilterRequest`)
+  plus `evaluate_ticker()`, which computes only the ENABLED indicators from
+  a ticker's cached closes and checks each against its operator/threshold —
+  RSI is a single period+operator+threshold; SMA/EMA are each one shared
+  operator applied as an AND across an editable list of periods (e.g.
+  "price > SMA for every period in [5,20,150,200]"). All periods/thresholds
+  are bounded (`MIN_PERIOD`–`MAX_MA_PERIOD`/`MAX_RSI_PERIOD`) since they
+  can't exceed what `MAX_STORED_CLOSES` retains; out-of-range SMA/EMA
+  periods are silently dropped (matches the frontend's own live-typing
+  leniency) rather than rejected with a 422.
 - **`app.py`** — FastAPI service: startup loads `cache.json` if present (so
   a cold start after a host sleep serves *something* instantly), a
   background scheduler calls `run_full_scan()` every `REFRESH_INTERVAL_MIN`
-  minutes, `GET /api/scan` filters the in-memory cache only, `POST
-  /api/refresh` force-refreshes behind a single-flight lock + short
-  cooldown, `GET /api/status` reports scan-in-progress/cooldown state for
-  the frontend to poll, and everything sits behind HTTP Basic Auth.
-- **`static/index.html`** — filter controls + sortable table, no build step,
-  polls `/api/status` and re-queries `/api/scan` on every filter change.
+  minutes, `POST /api/scan` (a body, not query params, since the condition
+  payload is nested) filters + evaluates conditions against the in-memory
+  cache only, `POST /api/refresh` force-refreshes behind a single-flight
+  lock + short cooldown, `GET /api/status` reports scan-in-progress/cooldown
+  state for the frontend to poll, and everything sits behind HTTP Basic Auth.
+- **`static/index.html`** — RSI/SMA/EMA condition panel + plain filters
+  (market/squeeze/owned/ticker search) + sortable table, no build step,
+  polls `/api/status` and re-POSTs `/api/scan` on every condition/filter
+  change.
 - **`watchlist.example.txt`** — template; copy to `watchlist.txt` (gitignored,
   not committed — this repo is public and a scanner, not a watchlist viewer)
   and fill in your own tickers if you want the optional "Owned" column.
   Missing `watchlist.txt` is not an error — the scan just runs with an empty
   watchlist and no ticker is flagged as owned.
+
+## Performance note
+
+`POST /api/scan` recomputes indicators for every ticker on every request
+(no caching of computed values, only of raw prices) -- measured at ~3s for
+the full ~1400-ticker universe with RSI + 4 SMA periods + 4 EMA periods all
+enabled at once. Fine for a single-user tool with the frontend's 300ms
+debounce, but if this ever needs to feel more instant (e.g. multiple
+concurrent users), the straightforward next step is vectorizing across
+tickers with numpy instead of one `pandas.Series` + rolling/ewm call per
+ticker.
 
 ## Rate-limit safeguards
 
@@ -110,18 +150,34 @@ credentials from `.env`).
 
 ## Verification checklist
 
-- [ ] `python scan_engine.py` completes with no visible yfinance 429s; note
-      the wall-clock time.
-- [ ] `GET /api/scan` with different filter combinations returns different
-      results, with no new yfinance calls per request (watch the uvicorn
-      logs — only the scheduler/refresh path should ever log a fetch).
-- [ ] Kill and restart the app; confirm it loads `cache.json` and serves
+All of these have been run at least once against the real universe (not
+just syntax-checked) — re-run after any change to `scan_engine.py`,
+`conditions.py`, or `app.py`, per this project's "test locally before
+pushing" rule:
+
+- [x] `python scan_engine.py` completes with no visible yfinance 429s; note
+      the wall-clock time. (Last measured: ~120s for ~1400 tickers.)
+- [x] `python test_conditions_manual.py` passes (synthetic data, no
+      network) — covers SMA/EMA/RSI matching, insufficient-history
+      exclusion, all-disabled vacuous match, and the `=` tolerance.
+- [x] `POST /api/scan` with different RSI/SMA/EMA/market/owned/squeeze/q
+      combinations returns different, correct results, with no new
+      yfinance calls per request (watch the uvicorn logs — only the
+      scheduler/refresh path should ever log a fetch). Cross-checked one
+      ticker's RSI(50) value against the old fixed-score system's output —
+      matched to 2 decimals, validating the `MAX_STORED_CLOSES` trim.
+- [x] Malformed conditions (period 0/negative/5000, invalid operator
+      string, RSI period past its Field bound) don't 500 — either silently
+      excluded/vacuous or a clean 422.
+- [x] Kill and restart the app; confirm it loads `cache.json` and serves
       data immediately instead of blocking on a fresh scan.
-- [ ] Click "Refresh now" twice in a row within the cooldown window; confirm
+- [x] Click "Refresh now" twice in a row within the cooldown window; confirm
       the second click gets a `cooldown` response, not a second concurrent
       scan. Wait past the cooldown and confirm a fresh refresh is allowed.
-- [ ] After deploying, confirm HTTP Basic Auth actually blocks
-      unauthenticated access to the public URL.
+- [x] Confirm HTTP Basic Auth actually blocks unauthenticated access to
+      every route on the live deploy, not just `/` — this project shipped a
+      real bug here once (an `app.mount("/static", ...)` that bypassed
+      auth entirely) that only local route-by-route curling caught.
 
 ## Hosting
 

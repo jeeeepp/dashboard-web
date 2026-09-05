@@ -58,11 +58,55 @@
     color: var(--muted);
     cursor: not-allowed;
   }
+  .conditions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .cond-group {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 10px;
+    min-width: 260px;
+  }
+  .cond-group > .group-title {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .cond-group label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .cond-group input, .cond-group select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+  .cond-group input[type="text"].periods { width: 140px; }
+  .cond-group input[type="number"] { width: 80px; }
   .filters {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    padding: 14px 20px;
+    padding: 12px 20px;
     border-bottom: 1px solid var(--border);
     background: var(--panel);
   }
@@ -122,6 +166,7 @@
     border-radius: 4px;
     font-size: 11px;
     font-weight: 600;
+    margin-right: 4px;
   }
   .tag-good { background: rgba(52,199,123,0.15); color: var(--good); }
   .tag-bad { background: rgba(239,91,91,0.15); color: var(--bad); }
@@ -139,23 +184,54 @@
   <button id="refresh-btn">Refresh now</button>
 </header>
 
+<div class="conditions">
+  <div class="cond-group">
+    <div class="group-title"><input id="rsi-enabled" type="checkbox"> RSI</div>
+    <label>Period
+      <input id="rsi-period" type="number" min="2" max="200" value="50">
+    </label>
+    <label>Operator
+      <select id="rsi-operator">
+        <option value=">">&gt;</option>
+        <option value="<">&lt;</option>
+        <option value="=">=</option>
+      </select>
+    </label>
+    <label>Value
+      <input id="rsi-value" type="number" step="1" value="60">
+    </label>
+  </div>
+
+  <div class="cond-group">
+    <div class="group-title"><input id="sma-enabled" type="checkbox"> SMA (price vs. every period below)</div>
+    <label>Operator
+      <select id="sma-operator">
+        <option value=">">price &gt; SMA</option>
+        <option value="<">price &lt; SMA</option>
+        <option value="=">price = SMA</option>
+      </select>
+    </label>
+    <label>Periods (comma-separated)
+      <input id="sma-periods" class="periods" type="text" value="5,20,150,200">
+    </label>
+  </div>
+
+  <div class="cond-group">
+    <div class="group-title"><input id="ema-enabled" type="checkbox"> EMA (price vs. every period below)</div>
+    <label>Operator
+      <select id="ema-operator">
+        <option value=">">price &gt; EMA</option>
+        <option value="<">price &lt; EMA</option>
+        <option value="=">price = EMA</option>
+      </select>
+    </label>
+    <label>Periods (comma-separated)
+      <input id="ema-periods" class="periods" type="text" value="7,30,89,200">
+    </label>
+  </div>
+</div>
+
 <div class="filters">
-  <label>Min shape
-    <select id="f-min-shape">
-      <option value="0">ทั้งหมด</option>
-      <option value="0.5">≥ 0.5</option>
-      <option value="1">= 1.0</option>
-    </select>
-  </label>
-  <label>Min RSI
-    <input id="f-min-rsi" type="number" step="1" placeholder="ไม่จำกัด">
-  </label>
-  <label>Max RSI
-    <input id="f-max-rsi" type="number" step="1" placeholder="ไม่จำกัด">
-  </label>
-  <label>Min total score
-    <input id="f-min-total" type="number" step="0.5" placeholder="ไม่จำกัด">
-  </label>
   <label>Market
     <select id="f-market">
       <option value="all">ทั้งหมด</option>
@@ -178,11 +254,9 @@
           <th data-key="ticker">Ticker</th>
           <th data-key="market">Market</th>
           <th data-key="price">Price</th>
-          <th data-key="shape_score">Shape</th>
           <th data-key="rsi">RSI</th>
-          <th data-key="power_score">Power</th>
-          <th data-key="total_score">Total</th>
-          <th data-key="full_signal">Signal</th>
+          <th>SMA</th>
+          <th>EMA</th>
           <th data-key="squeeze">Squeeze</th>
           <th data-key="owned">Owned</th>
           <th data-key="as_of_date">As of</th>
@@ -192,7 +266,7 @@
       <tbody id="tbody"></tbody>
     </table>
   </div>
-  <div id="empty-state" style="display:none;">ไม่มีข้อมูลตรงกับ filter นี้</div>
+  <div id="empty-state" style="display:none;">ไม่มีข้อมูลตรงกับเงื่อนไขนี้</div>
 </main>
 
 <script>
@@ -201,30 +275,41 @@ const refreshBtn = document.getElementById('refresh-btn');
 const tbody = document.getElementById('tbody');
 const emptyState = document.getElementById('empty-state');
 
-const filterIds = ['f-min-shape', 'f-min-rsi', 'f-max-rsi', 'f-min-total', 'f-market', 'f-squeeze', 'f-owned', 'f-q'];
-let sortKey = 'total_score';
-let sortDir = -1; // desc
+let sortKey = 'ticker';
+let sortDir = 1;
 let lastRows = [];
 let debounceTimer = null;
 let pollTimer = null;
 
-function buildQuery() {
-  const params = new URLSearchParams();
-  const minShape = document.getElementById('f-min-shape').value;
-  if (minShape) params.set('min_shape', minShape);
-  const minRsi = document.getElementById('f-min-rsi').value;
-  if (minRsi !== '') params.set('min_rsi', minRsi);
-  const maxRsi = document.getElementById('f-max-rsi').value;
-  if (maxRsi !== '') params.set('max_rsi', maxRsi);
-  const minTotal = document.getElementById('f-min-total').value;
-  if (minTotal !== '') params.set('min_total_score', minTotal);
-  const market = document.getElementById('f-market').value;
-  if (market !== 'all') params.set('market', market);
-  if (document.getElementById('f-squeeze').checked) params.set('squeeze_only', 'true');
-  if (document.getElementById('f-owned').checked) params.set('owned_only', 'true');
-  const q = document.getElementById('f-q').value.trim();
-  if (q) params.set('q', q);
-  return params.toString();
+function parsePeriods(text) {
+  return text.split(',')
+    .map(s => parseInt(s.trim(), 10))
+    .filter(n => Number.isInteger(n) && n >= 2 && n <= 400);
+}
+
+function buildRequestBody() {
+  return {
+    rsi: {
+      enabled: document.getElementById('rsi-enabled').checked,
+      period: parseInt(document.getElementById('rsi-period').value, 10) || 50,
+      operator: document.getElementById('rsi-operator').value,
+      threshold: parseFloat(document.getElementById('rsi-value').value) || 0,
+    },
+    sma: {
+      enabled: document.getElementById('sma-enabled').checked,
+      operator: document.getElementById('sma-operator').value,
+      periods: parsePeriods(document.getElementById('sma-periods').value),
+    },
+    ema: {
+      enabled: document.getElementById('ema-enabled').checked,
+      operator: document.getElementById('ema-operator').value,
+      periods: parsePeriods(document.getElementById('ema-periods').value),
+    },
+    market: document.getElementById('f-market').value,
+    owned_only: document.getElementById('f-owned').checked,
+    squeeze_only: document.getElementById('f-squeeze').checked,
+    q: document.getElementById('f-q').value.trim(),
+  };
 }
 
 function fmt(v, digits) {
@@ -235,6 +320,13 @@ function fmt(v, digits) {
 
 function tag(text, cls) {
   return `<span class="tag ${cls}">${text}</span>`;
+}
+
+function fmtMaGroup(values) {
+  // values: {period: computedValue}
+  const keys = Object.keys(values || {});
+  if (keys.length === 0) return '—';
+  return keys.map(p => `${p}:${Number(values[p]).toFixed(2)}`).join(' ');
 }
 
 function renderRows(rows) {
@@ -256,20 +348,15 @@ function renderRows(rows) {
   emptyState.style.display = 'none';
 
   tbody.innerHTML = sorted.map(r => {
-    const signalTag = r.full_signal ? tag('ทรงดีมีพลัง', 'tag-good') : tag('—', 'tag-muted');
     const squeezeTag = r.squeeze ? tag('บีบตัว', 'tag-warn') : '';
     const ownedTag = r.owned ? tag('Owned', 'tag-good') : '';
-    const powerLabel = r.power_score === 1 ? '+1' : (r.power_score === -1 ? '-1' : '0');
-    const powerCls = r.power_score === 1 ? 'tag-good' : (r.power_score === -1 ? 'tag-bad' : 'tag-muted');
     return `<tr>
       <td><strong>${r.ticker}</strong></td>
       <td>${r.market}</td>
       <td>${fmt(r.price, 2)}</td>
-      <td>${fmt(r.shape_score, 1)}</td>
       <td>${fmt(r.rsi, 1)}</td>
-      <td>${tag(powerLabel, powerCls)}</td>
-      <td>${fmt(r.total_score, 1)}</td>
-      <td>${signalTag}</td>
+      <td>${fmtMaGroup(r.sma)}</td>
+      <td>${fmtMaGroup(r.ema)}</td>
       <td>${squeezeTag}</td>
       <td>${ownedTag}</td>
       <td>${r.as_of_date ?? '—'}</td>
@@ -287,8 +374,11 @@ function relativeTime(iso) {
 }
 
 async function loadScan() {
-  const qs = buildQuery();
-  const resp = await fetch(`/api/scan?${qs}`);
+  const resp = await fetch('/api/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildRequestBody()),
+  });
   if (!resp.ok) {
     statusLine.textContent = `โหลดข้อมูลไม่สำเร็จ (HTTP ${resp.status})`;
     return;
@@ -314,11 +404,6 @@ async function pollStatus() {
     refreshBtn.disabled = false;
     refreshBtn.textContent = 'Refresh now';
   }
-  if (!data.scanning && pollTimer) {
-    // scan just finished (or was already idle) -- refresh the table once
-    // more so results reflect the latest cache without waiting on the
-    // regular poll interval.
-  }
 }
 
 async function tick() {
@@ -339,12 +424,18 @@ refreshBtn.addEventListener('click', async () => {
   await pollStatus();
 });
 
-filterIds.forEach(id => {
+const allFieldIds = [
+  'rsi-enabled', 'rsi-period', 'rsi-operator', 'rsi-value',
+  'sma-enabled', 'sma-operator', 'sma-periods',
+  'ema-enabled', 'ema-operator', 'ema-periods',
+  'f-market', 'f-squeeze', 'f-owned', 'f-q',
+];
+allFieldIds.forEach(id => {
   const el = document.getElementById(id);
   const evt = (el.type === 'checkbox' || el.tagName === 'SELECT') ? 'change' : 'input';
   el.addEventListener(evt, () => {
     clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(loadScan, 200);
+    debounceTimer = setTimeout(loadScan, 300);
   });
 });
 

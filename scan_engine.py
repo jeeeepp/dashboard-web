@@ -2,12 +2,18 @@
 """
 scan_engine.py — the ONLY place in this project that talks to yfinance.
 
-Everything here is orchestration around read-only-vendored code copied from
-the private `jeeeepp/agent-notification` repo (see vendor/README.md) — no
-trading-rule logic (SMA/RSI periods, thresholds, universe definition) is
-redefined here, it's all imported.
+Fetch/universe logic is orchestration around read-only-vendored code copied
+from the private `jeeeepp/agent-notification` repo (see vendor/README.md).
 
-`run_full_scan()` is expensive (fetches ~500-700 tickers' price history) and
+Unlike that repo's fixed "ทรงดีมีพลัง" rule (hard-coded SMA 5/20/150/200 +
+RSI(50) thresholds), this project's screen is fully user-configurable at
+filter time (see conditions.py) — RSI/SMA/EMA periods and thresholds are
+picked in the UI, not baked into the scan. To make that possible without a
+new yfinance call per filter change, each ticker's trailing CLOSE prices are
+kept in the cache (see ScanRow.closes) so conditions.py can compute any
+period's SMA/EMA/RSI purely from already-fetched data.
+
+`run_full_scan()` is expensive (fetches ~500-700+ tickers' price history) and
 is meant to be called on an internal schedule / manual force-refresh only —
 see app.py's ScanState for the caching + single-flight-lock layer that keeps
 this from ever running per page-view or per filter change.
@@ -18,7 +24,7 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,7 +36,7 @@ if str(VENDOR_DIR) not in sys.path:
     # other off sys.path rather than via package-relative imports.
     sys.path.insert(0, str(VENDOR_DIR))
 
-from scanner_core import LOOKBACK_CALENDAR_DAYS, load_watchlist, score_ticker  # noqa: E402
+from scanner_core import LOOKBACK_CALENDAR_DAYS, load_watchlist  # noqa: E402
 from market_screener import (  # noqa: E402
     fetch_price_history_bulk,
     is_squeezing,
@@ -41,6 +47,18 @@ log = logging.getLogger("scan_engine")
 
 WATCHLIST_PATH = BASE_DIR / "watchlist.txt"
 
+# How many trailing trading days of CLOSE price to keep per ticker for
+# on-demand indicator math (see conditions.py). Bounded rather than storing
+# the full ~1000-trading-day fetch, to keep cache.json a sane size -- 450
+# comfortably covers the largest period this project's condition models
+# allow (SMA/EMA up to 400, RSI up to 200) with margin for the rolling
+# window's own warm-up. NOTE: this trades a little RSI-convergence accuracy
+# for a much smaller/faster cache -- this project is a screener (explore
+# candidates, tune conditions live), not the original repo's exact-match
+# daily alert bot, so "close enough" here is an intentional, documented
+# choice, not an oversight.
+MAX_STORED_CLOSES = 450
+
 
 @dataclass
 class ScanRow:
@@ -48,13 +66,9 @@ class ScanRow:
     market: str  # "SET" or "US"
     price: float | None
     as_of_date: str | None
-    shape_score: float | None
-    rsi: float | None
-    power_score: int | None
-    total_score: float | None
-    full_signal: bool | None
     squeeze: bool
     owned: bool
+    closes: list[float] = field(default_factory=list)  # oldest -> newest
 
 
 def _market_for(ticker: str) -> str:
@@ -62,13 +76,15 @@ def _market_for(ticker: str) -> str:
 
 
 def run_full_scan() -> tuple[list[ScanRow], dict]:
-    """Fetch + score the whole watchlist + SET + US universe once.
+    """Fetch the whole watchlist + SET + US universe once, keeping each
+    ticker's trailing close-price series for later on-demand indicator
+    computation (see conditions.py) -- no scoring/filtering happens here.
 
     Returns (rows, stats). A single bad ticker never aborts the run (that's
-    handled inside fetch_price_history_bulk/score_ticker already) — this
-    only raises if the universe itself comes back empty, since that
-    indicates a real upstream problem (SP500/SET fetch both failed) worth
-    surfacing to the caller rather than silently caching zero rows.
+    handled inside fetch_price_history_bulk already) -- this only raises if
+    the universe itself comes back empty, since that indicates a real
+    upstream problem (SP500/SET fetch both failed) worth surfacing to the
+    caller rather than silently caching zero rows.
     """
     start = time.monotonic()
 
@@ -98,27 +114,25 @@ def run_full_scan() -> tuple[list[ScanRow], dict]:
             failed_count += 1
             continue
 
-        score = score_ticker(df, ticker)
-        if not score.ok:
+        close = df["Close"].dropna()
+        if close.empty:
             failed_count += 1
             continue
 
-        close = df["Close"].dropna()
-        price = float(close.iloc[-1]) if len(close) else None
+        price = float(close.iloc[-1])
+        as_of_date = close.index[-1]
+        as_of_date = as_of_date.date().isoformat() if hasattr(as_of_date, "date") else str(as_of_date)
 
         rows.append(
             ScanRow(
                 ticker=ticker,
                 market=_market_for(ticker),
                 price=price,
-                as_of_date=score.as_of_date,
-                shape_score=score.shape_score,
-                rsi=score.rsi,
-                power_score=score.power_score,
-                total_score=score.total_score,
-                full_signal=score.full_signal,
-                squeeze=is_squeezing(close),
+                as_of_date=as_of_date,
+                squeeze=is_squeezing(close),  # computed on the FULL fetched
+                                               # series, before trimming below
                 owned=ticker in owned,
+                closes=[round(float(v), 6) for v in close.tail(MAX_STORED_CLOSES)],
             )
         )
         ok_count += 1
@@ -148,6 +162,8 @@ if __name__ == "__main__":
     )
     result_rows, result_stats = run_full_scan()
     log.info("RESULT stats=%s", result_stats)
-    hits = [r for r in result_rows if r.full_signal]
-    log.info("%d full-signal ('ทรงดีมีพลัง') hits: %s",
-              len(hits), ", ".join(r.ticker for r in hits[:20]))
+    log.info(
+        "Sample row: %s",
+        {**asdict(result_rows[0]), "closes": f"<{len(result_rows[0].closes)} values>"}
+        if result_rows else None,
+    )

@@ -24,10 +24,11 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
+from conditions import ScanFilterRequest, evaluate_ticker, keep_row
 from scan_engine import run_full_scan, rows_to_dicts
 
 load_dotenv()  # no-op in prod (Render sets real env vars directly)
@@ -200,47 +201,30 @@ def check_auth(credentials: HTTPBasicCredentials = Depends(security)) -> None:
 # Routes
 # ---------------------------------------------------------------------------
 
-@app.get("/api/scan")
-async def api_scan(
-    min_shape: float = Query(0.0),
-    min_rsi: Optional[float] = Query(None),
-    max_rsi: Optional[float] = Query(None),
-    min_total_score: Optional[float] = Query(None),
-    squeeze_only: bool = Query(False),
-    market: str = Query("all", pattern="^(all|SET|US)$"),
-    owned_only: bool = Query(False),
-    q: str = Query(""),
-    _: None = Depends(check_auth),
-):
-    """Filters the IN-MEMORY CACHE ONLY -- no yfinance call ever happens on
-    this path, no matter how filters change. See ScanState._do_scan for the
-    only code path that ever calls run_full_scan()."""
+@app.post("/api/scan")
+async def api_scan(req: ScanFilterRequest, _: None = Depends(check_auth)):
+    """Filters + evaluates conditions against the IN-MEMORY CACHE ONLY -- no
+    yfinance call ever happens on this path, no matter how conditions
+    change (RSI/SMA/EMA periods, operators, thresholds all recompute purely
+    from each row's cached `closes`, see conditions.py). POST (not GET)
+    because the condition payload is a nested structure, not a few scalar
+    query params. See ScanState._do_scan for the only code path that ever
+    calls run_full_scan()."""
     state: ScanState = app.state.scan
-    q_upper = q.strip().upper()
 
-    def keep(r: dict) -> bool:
-        if r["shape_score"] is None or r["shape_score"] < min_shape:
-            return False
-        if min_rsi is not None and (r["rsi"] is None or r["rsi"] < min_rsi):
-            return False
-        if max_rsi is not None and (r["rsi"] is None or r["rsi"] > max_rsi):
-            return False
-        if min_total_score is not None and (
-            r["total_score"] is None or r["total_score"] < min_total_score
-        ):
-            return False
-        if squeeze_only and not r["squeeze"]:
-            return False
-        if market != "all" and r["market"] != market:
-            return False
-        if owned_only and not r["owned"]:
-            return False
-        if q_upper and q_upper not in r["ticker"].upper():
-            return False
-        return True
+    matched: list[dict] = []
+    for row in state.rows:
+        if not keep_row(row, req):
+            continue
+        evaluated = evaluate_ticker(row["closes"], row["price"], req)
+        if evaluated is None or not evaluated["match"]:
+            continue
+        # Don't echo the raw close-price series back to the client -- it's
+        # only needed server-side for indicator math.
+        public_row = {k: v for k, v in row.items() if k != "closes"}
+        matched.append({**public_row, **evaluated})
 
-    filtered = [r for r in state.rows if keep(r)]
-    return {"rows": filtered, "stats": state.stats, "count": len(filtered), "total": len(state.rows)}
+    return {"rows": matched, "stats": state.stats, "count": len(matched), "total": len(state.rows)}
 
 
 @app.get("/api/status")
